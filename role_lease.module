@@ -1,0 +1,1429 @@
+<?php
+// TODO: lock role lease type for editing!
+/**
+ * @file
+ * Support for configurable subscription-types
+ */
+// Using dateinterval spec: http://www.php.net/manual/en/dateinterval.construct.php based on ISO 8601 duration specification. 
+define('ROLE_LEASE_TIME_HOURS', 'H');
+define('ROLE_LEASE_TIME_DAYS', 'D');
+define('ROLE_LEASE_TIME_WEEKS', 'W');
+define('ROLE_LEASE_TIME_MONTHS', 'M');
+define('ROLE_LEASE_TIME_YEARS', 'Y');
+
+define('ROLE_LEASE_INACTIVE', 0);
+define('ROLE_LEASE_ACTIVE', 1);
+
+define('ROLE_LEASE_NOT_EXPIRED', 0);
+define('ROLE_LEASE_EXPIRED', 1);
+
+//TODO: could behaps be used for things like lease freezing etc, but needs more flexibility
+define('ROLE_LEASE_RELEASE_REASON_NONE', 0);
+define('ROLE_LEASE_RELEASE_REASON_EXPIRED', 1);
+define('ROLE_LEASE_RELEASE_REASON_REVOKED', 2);
+
+function role_lease_duration_options() {
+  return array(
+    ROLE_LEASE_TIME_HOURS => t('Hours'),
+    ROLE_LEASE_TIME_DAYS => t('Days'),
+    ROLE_LEASE_TIME_WEEKS => t('Weeks'),
+    ROLE_LEASE_TIME_MONTHS => t('Months'),
+    ROLE_LEASE_TIME_YEARS => t('Years'),
+  );
+}
+
+function role_lease_date_interval_spec($lease_time, $lease_time_unit) {
+  switch($lease_time_unit) {
+    case ROLE_LEASE_TIME_HOURS:
+      return 'PT' . $lease_time . $lease_time_unit;
+    default:
+      return 'P' . $lease_time . $lease_time_unit;
+  }
+}
+
+function role_lease_date_interval($lease_time, $lease_time_unit) {
+  return new DateInterval(role_lease_date_interval_spec($lease_time, $lease_time_unit));
+}
+
+function role_lease_date_now_diff($interval) {
+  $datetime = new DateTime();
+  $datetime->add($interval);
+  $now = new DateTime();
+  return $now->diff($datetime);
+}
+
+function role_lease_menu_alter(&$items) {
+}
+
+/**
+ * Implements hook_ENTITY_TYPE_view() 
+ */
+function role_lease_role_lease_view($entity, $view_mode, $langcode) {
+  //$entity['content']['role_lease_type'] = $entity->type()->view('role_lease');
+  $entity->content['role_lease_type'] = array( 
+    '#type' => 'container',
+    '#attributes' => array('class' => array('role-lease-type')),
+  );
+  //Possible to implement as pseudo field to get ordering in admin?
+  //Yes
+  $entity->content['role_lease_type'] += $entity->type()->view('role_lease');
+  //TODO: more flexible
+  $entity->content['time_left'] = array(
+    '#type' => 'item',
+    '#title' => t('Time left') . ':',
+    '#markup' => $entity->expiryTimeLeft('h'),
+  );
+  //dsm($entity->type()->view('teaser'));
+}
+
+/**
+ * Implements hook_ENTITY_TYPE_view() 
+ */
+function role_lease_role_lease_type_view($entity, $view_mode, $langcode) {
+  //dsm($entity);
+  //dsm($view_mode);
+}
+
+function role_lease_label($role_lease, $role_lease_type) {
+  //TODO: function to load role from RoleLease
+  return isset($role_lease->uid) ? $role_lease->user()->name . ':' . $role_lease->type : NULL;
+}
+
+/**
+ * Menu argument loader; Load a role lease type by string.
+ *
+ * @param $type
+ *   The machine-readable name of a role lease type to load.
+ * @return
+ *   A role lease type array or FALSE if $type does not exist.
+ */
+function role_lease_type_load($type) {
+  return role_lease_get_types($type);
+}
+
+/**
+ * Fetch a role lease object.
+ *
+ * @param $rlid
+ *   Integer specifying the role lease id.
+ * @param $reset
+ *   A boolean indicating that the internal cache should be reset.
+ * @return
+ *   A fully-loaded $role_lease object or FALSE if it cannot be loaded.
+ *
+ * @see profile2_load_multiple()
+ */
+function role_lease_load($rlid, $reset = FALSE) {
+  $role_leases = role_lease_load_multiple(array($rlid), array(), $reset);
+  return reset($role_leases);
+}
+
+/**
+ * Load multiple role leases based on certain conditions.
+ *
+ * @param $rlids
+ *   An array of role lease IDs.
+ * @param $conditions
+ *   An array of conditions to match against the {role_lease} table.
+ * @param $reset
+ *   A boolean indicating that the internal cache should be reset.
+ * @return
+ *   An array of role lease objects, indexed by rlid.
+ *
+ * @see entity_load()
+ * @see role_lease_load()
+ * //TOOD: @see profile2_load_by_user()??
+ */
+function role_lease_load_multiple($rlids = array(), $conditions = array(), $reset = FALSE) {
+  return entity_load('role_lease', $rlids, $conditions, $reset);
+}
+
+//"Helper" load function
+function role_lease_load_by_user($user, $conditions = array(), $reset = FALSE) {
+  return entity_load('role_lease', FALSE, array('uid' => $user->uid) + $conditions, $reset);
+}
+
+/**
+ * Deletes a role lease.
+ */
+function role_lease_delete(RoleLease $role_lease) {
+  $role_lease->delete();
+}
+
+/**
+ * Implements hook_user_delete().
+ */
+//TODO: implement, also sync when roles are deleted if possible
+function role_lease_user_delete($account) {
+  /*
+  foreach (role_lease_load_by_user($account) as $role_lease) {
+    role_lease_delete($role_lease);
+  }
+  */
+}
+
+/**
+ * Create a new profile object.
+ */
+function role_lease_create(array $values) {
+  return new RoleLease($values);
+}
+
+/**
+ * Saves a role lease to the database.
+ *
+ * @param $role_lease
+ *   The role lease object.
+ */
+function role_lease_save(RoleLease $role_lease) {
+  return $role_lease->save();
+}
+
+/**
+ * Saves a role lease type to the database.
+ */
+function role_lease_type_save(RoleLeaseType $type) {
+  $type->save();
+}
+
+/**
+ * Deletes a profile type from the database.
+ */
+function role_lease_type_delete(RoleLeaseType $type) {
+   $type->delete();
+}
+
+/**
+ * Implements hook_role_lease_insert().
+ */
+//TODO: check if really needed
+function role_lease_role_lease_insert(RoleLease $role_lease) {
+}
+
+/**
+ * Implements hook_role_lease_update().
+ */
+function role_lease_role_lease_update(RoleLease $role_lease) {
+  menu_rebuild();
+}
+
+/**
+* Implements hook_role_lease_delete()
+*/
+function role_lease_role_lease_delete(RoleLease $role_lease) {
+  menu_rebuild();
+}
+
+
+/**
+ * Implements hook_role_lease_type_insert().
+ */
+//TODO: check if really needed
+function role_lease_role_lease_type_insert(RoleLeaseType $type) {
+  menu_rebuild();
+}
+
+/**
+ * Implements hook_role_lease_type_update().
+ */
+function role_lease_role_lease_type_update(RoleLeaseType $type) {
+  menu_rebuild();
+}
+
+/**
+* Implements hook_role_lease_type_delete()
+*/
+function role_lease_role_lease_type_delete(RoleLeaseType $type) {
+  // Delete all role leases of this type.
+  if ($rlids = array_keys(role_lease_load_multiple(FALSE, array('type' => $type->type)))) {
+    role_lease_delete_multiple($rlids);
+  }
+  menu_rebuild();
+}
+
+
+/**
+ * Implements hook_forms().
+ */
+/*
+function role_lease_forms() {
+  $forms = array();
+  if($types = role_lease_get_types()) {
+    foreach(array_keys($types) as $type) {
+      $forms[$type . '_role_lease_form']['callback'] = 'role_lease_form';    
+    }
+  }
+  $forms[
+}
+*/
+
+/**
+ * Implements hook_entity_info().
+ */
+function role_lease_entity_info() {
+  //TODO: admin ui?
+  $return = array(
+    'role_lease' => array(
+      'label' => t('Role lease'),
+      'plural label' => t('Role leases'),
+      'description' => t('TODO'),
+      'entity class' => 'RoleLease',
+      'controller class' => 'EntityAPIController',
+      'base table' => 'role_lease',
+      'fieldable' => FALSE,
+      'label callback' => 'role_lease_label',
+      'uri callback' => 'entity_class_uri', //needed?
+      'access callback' => 'role_lease_access',
+      'view modes' => array(
+        'user' => array(
+          'label' => t('User view mode'),
+          //'custom settings' => FALSE,
+        ),
+        'admin' => array(
+          'label' => t('Admin view mode'),
+          //'custom settings' => TRUE,
+        ),
+      ),
+      'entity keys' => array(
+        'id' => 'rlid',
+        'bundle' => 'type',
+      ),
+      'bundles' => array(),
+      'bundle keys' => array(
+        'bundle' => 'type',
+      ),
+      'module' => 'role_lease',
+      // Enable the entity API's admin UI.
+      'admin ui' => array(
+        'path' => 'admin/structure/role_leases',
+        'file' => 'role_lease.admin.inc',
+      ),
+      'metadata controller class' => 'RoleLeaseMetadataController'
+    ),
+  );
+
+  // Add bundle info but bypass entity_load() as we cannot use it here.
+  
+  $types = db_select('role_lease_type', 'rl')
+    ->fields('rl')
+    ->execute()
+    ->fetchAllAssoc('type');
+
+  foreach ($types as $type => $info) {
+    $return['role_lease']['bundles'][$type] = array(
+      'label' => $info->label,
+      'admin' => array(
+        'path' => 'admin/structure/role_lease_types/manage/%role_lease_type',
+        'real path' => 'admin/structure/role_lease_types/manage/' . $type,
+        'bundle argument' => 4,
+        'access arguments' => array('administer role leases'),
+      ),
+    );
+  }
+
+  /*
+  // Support entity cache module.
+  if (module_exists('entitycache')) {
+    $return['role_lease']['field cache'] = FALSE;
+    $return['role_lease']['entity cache'] = TRUE;
+  }
+  */
+
+  $return['role_lease_type'] = array(
+    'label' => t('Role lease type'),
+    'plural label' => t('Role lease types'),
+    'description' => t('TODO'),
+    'entity class' => 'RoleLeaseType',
+    'controller class' => 'EntityAPIControllerExportable',
+    'base table' => 'role_lease_type',
+    'fieldable' => TRUE, //Fieldable?
+    'uri callback' => 'entity_class_uri', //needed?
+    'view modes' => array(
+      'full' => array(
+        'label' => t('Full content'),
+        'custom settings' => FALSE,
+      ),
+      'teaser' => array(
+        'label' => t('Teaser'),
+        'custom settings' => TRUE,
+      ),
+      'role_lease' => array(
+        'label' => t('Role lease'),
+        'custom settings' => TRUE,
+      ),
+    ),
+    'bundle of' => 'role_lease',
+    'exportable' => TRUE,
+    'entity keys' => array(
+      'id' => 'id',
+      'name' => 'type',
+      'label' => 'label',
+      //'bundle' => 'type',
+    ),
+    'access callback' => 'role_lease_type_access',
+    'module' => 'role_lease',
+    // Enable the entity API's admin UI.
+    'admin ui' => array(
+      'path' => 'admin/structure/role_lease_types',
+      'file' => 'role_lease_type.admin.inc',
+      'controller class' => 'RoleLeaseTypeUIController',
+    ),
+  );
+  //Correct?
+  $return['role_lease_type']['bundles']['role_lease_type'] = array(
+    'label' => $return['role_lease_type']['label'],
+    'admin' => array(
+      //'path' => 'admin/structure/role_lease_types_test/manage/%role_lease_type_bundle',
+      //'real path' => 'admin/structure/role_lease_types_test/manage/role_lease_type',
+      'path' => 'admin/structure/role_lease_types',
+      //'bundle argument' => 4,
+      //'access arguments' => array('administer role leases'),
+    ),
+    /*
+    'role_lease_acquire' => '',
+    'role_lease_release' => '',
+    */
+  );
+  return $return;
+}
+
+/**
+ *  Implementation of hook_entity_property_info()
+ */
+/*
+function role_lease_entity_property_info() {
+  return array(
+    'role_lease' => array(
+      'properties' => array(
+        'uid' => array(
+          'label' => t('User'),
+          'description' => t('Role lease owner'),
+          'type' => 'entity',
+        ),
+      )
+    ),
+    //'role_lease_type' => array(
+      //'properties' => array()
+    //),
+  );
+}
+*/
+
+/*
+function role_lease_views_data_alter(&$data) {
+  $data['role_lease']['user']['argument'] = array();
+  $data['role_lease']['user']['filter'] = array();
+}*/
+
+function role_lease_type_bundle_load($type) {
+  return 'role_lease_type';
+}
+
+/**
+ * Implements hook_permission().
+ */
+function role_lease_permission() {
+  $permissions = array(
+    'administer role lease types' =>  array(
+      'title' => t('Administer role lease types'),
+      'description' => t('TODO.'),
+    ),
+    'administer role leases' =>  array(
+      'title' => t('Administer role leases'),
+      'description' => t('Edit and view all role leases.'),
+    ),
+    'view role lease types' => array(
+      'title' => t('View role lease types'),
+      'description' => t('TODO.'),
+    ),
+  );
+  return $permissions;
+}
+
+
+function role_lease_type_options_list() {
+  $options = array();
+  foreach(role_lease_get_types() as $type => $entity){
+    $options[$type] = $entity->label;
+  }
+  return $options;
+}
+
+/**
+ * Action: Adds roles to a particular user.
+ */
+function role_lease_user_add_role($account, $rid) {
+  $role_list = user_roles(TRUE);
+  if(isset($role_list[$rid]) && !isset($account->roles[$rid])) {
+    $account->roles[$rid] = $role_list[$rid];
+    user_save($account);
+  }
+  else {
+    //TODO: watchdog warning
+  }
+}
+
+/**
+ * Action: Remove roles from a given user.
+ */
+function role_lease_user_remove_role($account, $rid) {
+  // If the user has this role, remove it.
+  if (isset($account->roles[$rid])) {
+    unset($account->roles[$rid]);
+    user_save($account);
+  }
+  else {
+    //TODO: watchdog warning
+  }
+}
+
+function role_lease_activate_action($role_lease, $context = array()) {
+  $role_lease->active = ROLE_LEASE_ACTIVE;
+  module_invoke_all('role_lease_activate', $role_lease);
+  //TODO: watchdog
+}
+
+function role_lease_release_action($role_lease, $context = array()) {
+  $role_lease->active = ROLE_LEASE_INACTIVE;
+  //TODO: this is not good, should chech in presave, load unsaved entity
+  //TODO: this is vvvvrong
+  module_invoke_all('role_lease_release', $role_lease);
+  //TODO: watchdog
+}
+
+//Acquire????
+function role_lease_renew_action($role_lease, $context = array()) {
+}
+
+
+function role_lease_action_info() {
+  return array(
+    'role_lease_activate_action' => array(
+      'type' => 'role_lease',
+      'label' => t('Activate role lease'),
+      'configurable' => FALSE,
+      'behavior' => array('changes_property'),
+      'triggers' => array('role_lease_presave'), //WTF does this do?
+    ),
+    'role_lease_release_action' => array(
+      'type' => 'role_lease',
+      'label' => t('Deactivate role lease'),
+      'configurable' => FALSE,
+      'behavior' => array('changes_property'),
+      'triggers' => array('role_lease_presave'), //WTF does this do?
+    ),
+    /*
+    'role_lease_expire_action' => array(
+      'type' => 'role_lease',
+      'label' => t('Expire role lease'),
+      'configurable' => FALSE,
+      'behavior' => array('changes_property'),
+      'triggers' => array('node_presave', 'comment_insert', 'comment_update', 'comment_delete'),
+    ),
+     */
+    'role_lease_renew_action' => array(
+      'type' => 'role_lease',
+      'label' => t('Renew role lease'),
+      'configurable' => TRUE,
+      'behavior' => array('changes_property'),
+      'triggers' => array(), //array('node_presave', 'comment_insert', 'comment_update', 'comment_delete'),
+    ),
+  );
+}
+
+function role_lease_renew_action_form($context) {
+  //TODO
+}
+
+function role_lease_invoke_all($hook, $role_lease) {
+  $hook = 'role_lease_' . $hook;
+  $args = func_get_args();
+  $args = array_slice($args, 1);
+  foreach(module_implements($hook) as $module) {
+    $function = $module . '_' . $hook;
+    if(!call_user_func_array($function, $args)) {
+      break;
+    }
+  }
+}
+
+
+//TODO: separate module for rule integration? 
+/*
+function role_lease_role_lease_acquire($role_lease) {
+  $role_lease_type = $role_lease->type();
+  $user = $role_lease->user();
+  role_lease_user_add_role($user, $role_lease_type->rid);
+}
+
+function role_lease_role_lease_release($role_lease, $reason) {
+  $role_lease_type = $role_lease->type();
+  $user = $role_lease->user();
+  role_lease_user_remove_role($user, $role_lease_type->rid);
+}
+*/
+
+//Drupals format_interval is incorrect about months and years, should we roll our own?
+function role_lease_format_interval(DateInterval $interval, $granularity = 'i', $separator = ' ', $sign = TRUE, $langcode = NULL) {
+  $drupal_formats = array(
+    'y' => array('1 year','@count years'), 
+    'm' => array('1 month','@count months'), 
+    //array('1 week', '@count weeks'), 
+    'd' => array('1 day', '@count days'), 
+    'h' => array('1 hour', '@count hours'), 
+    'i' => array('1 min', '@count min'), 
+    //array('1 sec', '@count sec'),
+  );
+  $format_string = array();
+
+  foreach(array(
+    'y' => 'y',
+    'm' => 'm',
+    'd' => 'd',
+    'h' => 'h',
+    'i' => 'i',
+  ) as $prop => $format_char) {
+    if($interval->{$prop}) {
+      $format_string[] = $prop . '|%' . $format_char;
+    }
+    if($prop === $granularity) {
+      break;
+    }
+  }
+
+  $format_string = implode(',', $format_string);
+  $results = $interval->format($format_string);
+  
+  $translated = array();
+
+  foreach(explode(',', $results) as $result) {
+    list($prop, $value) = explode('|', $result);
+    list($singular, $plural) = $drupal_formats[$prop];
+    $translated[] = format_plural(intval($value), $singular, $plural, array(), array('langcode' => $langcode));
+    if($prop === $granularity) {
+      break;
+    }
+  }
+  return ($sign ? $interval->format('%r') : '') . (empty($translated) ? t('0 sec', array(), array('langcode' => $langcode)) : implode($separator, $translated));
+}
+
+/**
+ * The class used for role_lease entities.
+ */
+//Support revisions as form of logging?
+class RoleLease extends Entity {
+
+  /**
+   * The role_lease id.
+   *
+   * @var integer
+   */
+  public $rlid;
+
+  /**
+   * The name of the role_lease type.
+   *
+   * @var string
+   */
+  public $type;
+
+  /**
+   * The role_lease label.
+   *
+   * @var string
+   */
+  public $label;
+
+  /**
+   * The user id of the role lease owner.
+   *
+   * @var integer
+   */
+  public $uid;
+
+  /**
+   * Expiry date of the role lease, an unix timestamp.
+   *
+   * @var integer
+   */
+  public $expiry_time;
+
+
+  /**
+   * Flag for if before expire has been triggered
+   *
+   * @var integer
+   */
+  public $before_expire_triggered;
+
+  /**
+   * Flag to indicate if expired or not.
+   *
+   * @var integer(or boolean?)
+   */
+  public $expired;
+
+  /**
+   * Status of the role lease
+   *
+   * @var integer
+   */
+  //TODO: protected?
+  public $active; 
+
+  /**
+   * The Unix timestamp when the role_lease was created.
+   *
+   * @var integer
+   */
+  public $created;
+
+  /**
+   * The Unix timestamp when the role_lease was most recently saved.
+   *
+   * @var integer
+   */
+  public $changed;
+
+  /**
+   * The Unix timestamp when the role_lease was acquired.
+   *
+   * @var integer
+   */
+  //TODO: protected?
+  public $acquired_time;
+
+
+  /**
+   * The Unix timestamp when the role_lease was released.
+   *
+   * @var integer
+   */
+  //TODO: protected?
+  public $released_time; 
+  //TODO: Seems like pdo will leave properties with values set alone, investigate this so that for
+  //example created and changed are not set every time
+  //TODO: set created and updated properly
+  public function __construct($values = array()) {
+    /*
+    $values = array(
+      'status' => ROLE_LEASE_INACTIVE,
+      //'before_expire_triggered' => 0, //TODO: constant for this?
+      'created' => time(), //TODO: make sure we set this only once 
+      'changed' => time(),
+    ) + $values;
+    */
+    if (
+      isset($values['type']) &&
+      is_object($values['type']) &&
+      $values['type'] instanceof RoleLeaseType
+    ) {
+      $values['type'] = $values['type']->type;
+    }
+    //TODO: Custom exception class?
+    if(!$this->uid) {
+      throw new Exception('uid must have a none zero value.');
+    }
+    parent::__construct($values, 'role_lease');
+  }
+
+  /**
+   * Returns the type of the entity.
+   */
+  //Need implement this?
+  /*
+  public function entityType() {
+    return $this->type;
+  }
+  */
+
+  /**
+   * Returns the user owning this role_lease.
+   */
+  public function user() {
+    return isset($this->uid) ? user_load($this->uid) : NULL;
+  }
+
+  public function active() {
+    return $this->active == ROLE_LEASE_ACTIVE;
+  }
+ 
+  //Should these be implememnted in controller?
+  //TODO: handle case when already aqcuired
+  public function acquire() {
+    $transaction = db_transaction();
+    try {
+      //TODO: absolutely bad to perform this in hook, here we should be 100% that action is performed 
+      //role_lease_invoke_all('acquire', $this);
+      //$this->type()->acquire($this);
+      //$this->renew(); //This should perhaps be handled through some other mechanism
+      role_lease_invoke_all('acquire', $this);
+      $role_lease_type = $this->type();
+      $user = $this->user();
+      role_lease_user_add_role($user, $role_lease_type->rid);
+      $this->acquired_time = REQUEST_TIME;
+      $this->released_time = 0;
+      //TODO: this ok?
+      $this->renew();
+    }
+    catch (Exception $e) {
+      $transaction->rollback();
+      watchdog_exception('role_lease', $e);
+      throw $e;
+    }
+  }
+
+  public function release($reason = ROLE_LEASE_RELEASE_REASON_NONE) {
+    $transaction = db_transaction();
+    try {
+      //role_lease_invoke_all('release', $this, $reason);
+      //$this->type()->release($this);
+      role_lease_invoke_all('release', $this);
+      $role_lease_type = $this->type();
+      $user = $this->user();
+      role_lease_user_remove_role($user, $role_lease_type->rid);
+      $this->active = ROLE_LEASE_INACTIVE;
+      $this->expiry_time = 0;
+      $this->acquired_time = 0;
+      $this->released_time = REQUEST_TIME;
+      $this->release_reason = $reason;
+      $this->save();
+    }
+    catch (Exception $e) {
+      $transaction->rollback();
+      watchdog_exception('role_lease', $e);
+      throw $e;
+    }
+  }
+
+  public function expire() {
+    $transaction = db_transaction();
+    try {
+      role_lease_invoke_all('expire', $this);
+      $this->expired = ROLE_LEASE_EXPIRED;
+      $this->save();
+    }
+    catch (Exception $e) {
+      $transaction->rollback();
+      watchdog_exception('role_lease', $e);
+      throw $e;
+    }
+  }
+
+  //TODO: How handle if we renew and expired item, etc? Require not expired or acquired?
+  public function renew() {
+    //TODO: not to sure about this
+    $transaction = db_transaction();
+    try {
+      $role_lease_type = $this->type();
+      //This code smells, partly solveble by calling function on type instead, with lease as argument, type class then decides behavior, perhaps bad to
+      if($role_lease_type->lease_time) {
+        if(!$this->expiry_time) {
+          $this->expiry_time = REQUEST_TIME;
+        }
+        $lease_time_interval = $role_lease_type->leaseTimeDateInterval();
+        $datetime = $this->expiryDateTime();
+        $datetime->add($lease_time_interval);
+        $this->expiryDateTime($datetime);
+      }
+      else {
+        //No expiry time
+        //TODO: make sure expiry query skips these values
+        $this->expiry_time = 0;
+      }
+      //Reset before expire fag
+      $this->active = ROLE_LEASE_ACTIVE;
+      $this->before_expire_triggered = 0;
+      $this->save();
+    }
+    catch (Exception $e) {
+      $transaction->rollback();
+      watchdog_exception('role_lease', $e);
+      throw $e;
+    }
+  }
+
+  //This makes sense?
+  /*
+  public function renew() {
+    $this->type()->renew($this);
+  }
+   */
+
+  public function expiryFractionLeft() {
+    //TODO: use requiest time
+    $now = time();
+    if($this->expired || $this->expiry_time < REQUEST_TIME) {
+      return NULL;
+    }
+    $time_left = $this->expiryDateIntervalLeft();
+    if($time_left) {
+      //TOOD: lease period entity
+      /*
+      dsm($this->acquiredDateTime());
+      $period = new DatePeriod($this->acquiredDateTime(), $this->type()->leaseTimeDateInterval(), $this->expiryDateTime());
+      foreach($period as $date) {
+        dsm($date);
+      }
+      */
+      /*
+      dsm($time_left->days);
+      dsm($this->type()->leaseTimeDateInterval()->format('%a'));
+      dsm($time_left / $this->type()->leaseTimeDateInterval());
+      */
+    }
+    return ($this->expiry_time - REQUEST_TIME) / ($this->expiry_time - $this->acquired_time);
+  }
+
+  public function expiryDateIntervalLeft() {
+    //TODO: how protect against invalid states?
+    if($this->expired) {
+      return NULL;
+    }
+    $datetime = $this->expiryDateTime();
+    $now = new DateTime('now');
+    $interval = $now->diff($datetime);
+    return $interval;
+  }
+
+  //TODO: rename format
+  public function expiryTimeLeft($separator = ' ') {
+    //TODO: how protect against invalid states?
+    if($this->expired) {
+      return NULL;
+    }
+    $interval = $this->expiryDateIntervalLeft();
+    return role_lease_format_interval($interval, $separator);
+  }
+
+  //Construct DateTime object from $this->expiry_time
+  public function expiryDateTime($datetime = NULL) {
+    if(isset($datetime)) {
+      $this->expiry_time = $datetime->getTimestamp();
+    }
+    else {
+      return role_lease_datetime($this->expiry_time);
+    }
+    return NULL;
+  }
+
+  public function acquiredDateTime() {
+    if(isset($datetime)) {
+      $this->acquired_time = $datetime->getTimestamp();
+    }
+    else {
+      return role_lease_datetime($this->acquired_time);
+    }
+    return NULL;
+  }
+
+  /*
+  public function setExpiryDateTime($datetime) {
+    $this->expiry_time = $datetime->getTimestamp();
+  }
+  */
+    
+  /**
+   * Gets the associated RoleLeaseType object.
+   *
+   * @return RoleLeaseType
+   */
+  public function type() {
+    return role_lease_get_types($this->type);
+  }
+
+  /**
+   * Returns the full url() for the role lease.
+   */
+  public function url() {
+    $uri = $this->uri();
+    return url($uri['path'], $uri);
+  }
+
+  /**
+   * Returns the drupal path to this role lease.
+   */
+  public function path() {
+    $uri = $this->uri();
+    return $uri['path'];
+  }
+
+  public function defaultUri() {
+    return array(
+      'path' => 'role_lease/' . $this->identifier(),
+      'options' => array('fragment' => 'role_lease-' . $this->entityType()),
+    );
+  }
+
+  /**
+   * Generate an array for rendering the entity.
+   *
+   * @see entity_view()
+   */
+  //TODO: use pseudofield instead
+  /*
+  public function view($view_mode = 'full', $langcode = NULL, $page = NULL) {
+    parent::view($view_mode, $langcode, etc
+    return entity_get_controller($this->entityType)->view(array($this), $view_mode, $langcode, $page);
+  }
+  */
+
+  public function buildContent($view_mode = 'full', $langcode = NULL) {
+    $content = array();
+    // Assume newly create objects are still empty.
+    if (!empty($this->is_new)) {
+      $content['empty']['#markup'] = '<em class="role_lease-no-data">' . t('There is no role_lease data yet.') . '</em>';
+    }
+    return entity_get_controller($this->entityType)->buildContent($this, $view_mode, $langcode, $content);
+  }
+
+  public function save() {
+    // Care about setting created and changed values. But do not automatically
+    // set a created values for already existing role_leases.
+    if (empty($this->created) && (!empty($this->is_new) || !$this->rlid)) {
+      $this->created = REQUEST_TIME;
+    }
+    $this->changed = REQUEST_TIME;
+
+    parent::save();
+    // Update the static cache from role_lease_load_by_user().
+    /*
+    $cache = &drupal_static('role_lease_load_by_user', array());
+    if (isset($cache[$this->uid])) {
+      $cache[$this->uid][$this->type] = $this->rlid;
+    }
+    */
+  }
+
+  public function delete() {
+    $this->release();
+    parent::delete();
+  }
+}
+
+function role_lease_datetime($timestamp) {
+  $datetime = new DateTime();
+  $datetime->setTimestamp($timestamp);
+  //TODO: get drupal timezone?
+  if(module_exists('date')) {
+    $timezone = new DateTimeZone(date_default_timezone());
+    $datetime->setTimeZone($timezone);
+  }
+  return $datetime;
+}
+
+/**
+ * Use a separate class for role_lease types so we can specify some defaults
+ * modules may alter.
+ */
+
+//TODO: how handle $module?
+class RoleLeaseType extends Entity {
+
+  /**
+   * Whether the role_lease is displayed on the user account page.
+   */
+  public $userView = TRUE;
+
+  public $type; 
+  public $bundle = 'role_lease_type'; //TODO: just testing
+  public $label;
+  //public $group_name;
+  public $weight = 0;
+  public $lease_time;
+  public $lease_time_unit;
+  public $rid;
+
+  public function __construct($values = array()) {
+    /*
+    $default_values = array(
+      'status' => ENTITY_FIXED,
+    );
+     */
+    $default_values = array();
+    parent::__construct($values + $default_values, 'role_lease_type');
+  }
+
+  /*
+  public function acquire($role_lease) {
+    //check that role_lease belongs to this type?? Problematic
+    //$this->renew($role_lease);
+  }
+
+  public function release($role_lease) {
+
+  }
+  */ 
+  //OR just hook in on release and acquire?
+  /*
+  public function renew($role_lease) {
+    //TODO: not to sure about this
+    $datetime = $role_lease->expiryDateTime();
+    $lease_time_interval = new DateInterval($this->leaseTimeDateInterval());
+    $datetime->add($lease_time_interval);
+    $role_lease->expiryDateTime($datetime);
+  }
+  */
+
+  //Return lease time in interval specification format
+  //TODO: rename
+  protected function leaseTimeDateIntervalSpec() {
+    return role_lease_date_interval_spec($this->lease_time, $this->lease_time_unit);
+  }
+
+  public function leaseTimeDateInterval() {
+    return new DateInterval($this->leaseTimeDateIntervalSpec());
+  }
+
+  //Just get role lease
+
+  //User object instead for consistency?
+  public function getRoleLease($uid = NULL) {
+    global $user;
+    if(!isset($uid)) {
+      $uid = $user->uid;
+    }
+    $query = new EntityFieldQuery();
+    //TODO: add settings for range parameter
+    //TODO: make sure this is safe
+    $query->entityCondition('entity_type', 'role_lease')
+      ->entityCondition('bundle', $this->type)
+      ->propertyCondition('uid', $uid);
+    $result = $query->execute();
+    
+    if(isset($result['role_lease'])) {
+      $rlid = key($result['role_lease']);
+      return role_lease_load($rlid);
+    }
+    else {
+      //Throw exception not found?
+    }
+    return NULL;
+  }
+  /*
+  public function roleLeases($conditions = array()) {
+  }
+  */
+
+  //Throw exception if already exists, or just return existing?
+  public function createRoleLease($uid = NULL, $values = array()) {
+    if(!isset($uid)) {
+      global $user;
+      $uid = $user->uid;
+    }
+    $values = array(
+      'uid' => $uid,
+      'type' => $this,
+    ) + $values;
+    return new RoleLease($values);
+  }
+
+  /**
+   * Override this in order to implement a custom default URI and specify
+   * 'entity_class_uri' as 'uri callback' hook_entity_info().
+   */
+  protected function defaultUri() {
+    return array(
+      'path' => 'role_lease_type/' . $this->identifier(),
+      'options' => array('fragment' => 'role_lease_type-' . $this->entityType()),
+    );
+  }
+
+  /**
+   * Returns the full url() for the role lease.
+   */
+  public function url() {
+    $uri = $this->uri();
+    return url($uri['path'], $uri);
+  }
+
+  /**
+   * Returns the drupal path to this role lease.
+   */
+  public function path() {
+    $uri = $this->uri();
+    return $uri['path'];
+  }
+
+  //TODO: hmm, this seems redundant?
+  /**
+   * Returns the type of the entity.
+   */
+  public function entityType() {
+    return $this->type;
+  }
+
+  /**
+   * Returns whether the role_lease type is locked, thus may not be deleted or renamed.
+   *
+   * RoleLease types provided in code are automatically treated as locked, as well
+   * as any fixed role_lease type.
+   */
+  public function isLocked() {
+    return isset($this->status) && empty($this->is_new) && (($this->status & ENTITY_IN_CODE) || ($this->status & ENTITY_FIXED));
+  }
+
+  public function delete() {
+    $transaction = db_transaction();
+    try {
+      $query = new EntityFieldQuery();
+      $query->entityCondition('entity_type', 'role_lease')
+        ->entityCondition('bundle', $role_lease_type->type);
+      $result = $query->execute();
+      if(isset($result['role_lease'])) {
+        $rlids = array_keys($result['role_lease']);
+        entity_delete_multiple('role_lease', $rlids);
+      }
+      parent::delete();
+    } catch (Exception $e) {
+      $transaction->rollback();
+      watchdog_exception('role_lease', $e);
+      throw $e;
+    }
+  }
+}
+
+
+
+/**
+ * Gets an array of all role lease types, keyed by the type name.
+ *
+ * @param $type_name
+ *   If set, the type with the given name is returned.
+ * @return RoleLeaseType[]
+ *   Depending whether $type isset, an array of role lease types or a single one.
+ */
+function role_lease_get_types($type_name = NULL) {
+  $types = entity_load_multiple_by_name('role_lease_type', isset($type_name) ? array($type_name) : FALSE);
+  return isset($type_name) ? reset($types) : $types;
+}
+
+
+/**
+ * Determines whether the given user has access to a role_lease.
+ *
+ * @param $op
+ *   The operation being performed. One of 'view', 'update', 'create', 'delete'
+ *   or just 'edit' (being the same as 'create' or 'update').
+ * @param $role_lease
+ *   (optional) A role_lease to check access for. If nothing is given, access for
+ *   all role_leases is determined.
+ * @param $account
+ *   The user to check for. Leave it to NULL to check for the global user.
+ * @return boolean
+ *   Whether access is allowed or not.
+ *
+ */
+
+function role_lease_access($op, $role_lease = NULL, $account = NULL) {
+  global $user;
+  if(!isset($account)) {
+    $account = $user;
+  }
+  //TODO: verify that admin still has access, or do I need to: "or $user->uid == 1"?
+  if(user_access('administer role leases', $account)) {
+    return TRUE;
+  }
+  if($op === 'view') {
+    return isset($role_lease) && $role_lease->uid == $user->uid;
+  }
+  return FALSE;
+}
+
+/**
+ * Access callback for the entity API.
+ */
+function role_lease_type_access($op, $lease_type = NULL, $account = NULL) {
+  global $user;
+  if(!isset($account)) {
+    $account = $user;
+  }
+  if(user_access('administer role lease types')) {
+    return TRUE;
+  }
+  if($op === 'view') {
+    if(user_access('view role lease types', $account)) {
+      return isset($lease_type);
+    }
+    /*
+    $active_leases = role_lease_load_by_user($account, array('active' => 1)); //type type?
+    //If user already has a lease of a lease type with higher weight, don't show this lease type
+    //TODO: fix this, not an object error some times after payment???
+    //dsm('lease type');
+    //dsm($lease_type);
+    foreach($active_leases as $active_lease) {
+      $active_lease_type = $active_lease->type();
+      //dsm('active');
+      //dsm($active_lease_type);
+      if($active_lease_type->weight && $active_lease_type->weight > $lease_type->weight) {
+        return FALSE;
+      }
+    }
+    */
+  }
+  return FALSE;
+}
+
+/**
+ * Page callback for node_lease_type
+ */
+function role_lease_type_page_view($role_lease_type) {
+  //TODO: page parameter in function view() etc
+  return $role_lease_type->view();
+}
+
+ /**
+ * Implementation of hook_menu().
+ */
+function role_lease_menu() {
+  $items = array();
+
+  $items['admin/config/role_lease'] = array(
+    'title' => 'Role lease',
+    'description' => 'Role lease settings.',
+    //'position' => 'right',
+    //'weight' => -10,
+    'page callback' => 'system_admin_menu_block_page',
+    'access arguments' => array('access administration pages'),
+    'file' => 'system.admin.inc',
+    'file path' => drupal_get_path('module', 'system'),
+  );
+
+
+  $items['role_lease_type/%role_lease_type'] = array(
+    //'title callback' => 'node_page_title',
+    //'title arguments' => array(1),
+    // The page callback also invokes drupal_set_title() in case
+    // the menu router's title is overridden by a menu link.
+    'page callback' => 'role_lease_type_page_view',
+    'page arguments' => array(1),
+    'access callback' => 'role_lease_type_access',
+    'access arguments' => array('view', 1),
+  );
+
+  /*
+  $items['role_lease/add'] = array(
+    'title' => 'Add content',
+    'page callback' => 'node_add_page',
+    'access callback' => '_node_add_access',
+    'file' => 'node.pages.inc',
+  );
+  foreach (role_lease_get_types() as $type) {
+    $type_url_str = str_replace('_', '-', $type->type);
+    $items['role_lease/add/' . $type_url_str] = array(
+      'title' => $type->name,
+      'title callback' => 'check_plain',
+      'page callback' => 'role_lease_add',
+      'page arguments' => array($type->type),
+      'access callback' => 'role_lease_access',
+      'access arguments' => array('create', $type->type),
+      'description' => $type->description,
+      'file' => 'role_lease.pages.inc',
+    );
+  }
+  */
+  return $items;
+}
+
+function role_lease_init() {
+  //role_lease_cron();
+  //_role_lease_trigger_before_expire();
+  /*
+  $role_lease = role_lease_load(64);
+  //$role_lease->before_expire_triggered = 0;
+  //$role_lease->save();
+  if(!$role_lease->before_expire_triggered) {
+    dsm('testset');
+    //rules_invoke_event('role_lease_before_expire', $role_lease, $role_lease->type()); //TODO: must send both, or fix with entity wrapper?
+    //TODO: method for this?
+    //$role_lease->before_expire_triggered = 1;
+  }
+  */
+}
+
+function _role_lease_trigger_before_expire() {
+
+  if(module_exists('rules')) {
+    $role_lease_types = role_lease_get_types();
+    //dsm($role_lease_types);
+    //dsm(gettype($role_lease_types));
+    //dsm($role_lease_types);
+    foreach($role_lease_types as $type => $entity) {
+      if($entity->data['before_expire_event_trigger']) {
+
+        $settings = $entity->data['before_expire_event'];
+        $interval = role_lease_date_interval($settings['time'], $settings['time_unit']);
+        //$interval = role_lease_date_interval(20, $settings['time_unit']);
+        $before_expire = new DateTime();
+        $before_expire->add($interval);
+
+        $query = new EntityFieldQuery();
+        $query->entityCondition('entity_type', 'role_lease')
+          ->propertyCondition('expiry_time', $before_expire->getTimestamp(), '<')
+          ->propertyCondition('before_expire_triggered', 0)
+          ->propertyCondition('active', ROLE_LEASE_ACTIVE) //TODO: hmmm?
+          ->range(0, 100);
+
+        $result = $query->execute();
+
+        if(isset($result['role_lease'])) {
+          $rlids = array_keys($result['role_lease']);
+          $before_expire_entities = entity_load('role_lease', $rlids);
+          foreach($before_expire_entities as $role_lease) {
+            rules_invoke_event('role_lease_before_expire', $role_lease, $role_lease->type()); //TODO: must send both, or fix with entity wrapper?
+            //TODO: method for this?
+            $role_lease->before_expire_triggered = 1;
+            $role_lease->save();
+          }
+        }
+      }
+    }
+  }
+}
+
+function _role_lease_expire() {
+  $query = new EntityFieldQuery();
+  $query->entityCondition('entity_type', 'role_lease')
+      ->propertyCondition('expiry_time', time(), '<')
+      ->propertyCondition('active', 1)
+      ->range(0, 100);
+  $result = $query->execute();
+  //TODO: expire callback stuff, per bundle?
+  if(isset($result['role_lease'])) {
+    $rlids = array_keys($result['role_lease']);
+    $expired_entities = entity_load('role_lease', $rlids);
+    foreach($expired_entities as $entity) {
+      role_lease_expire($entity);
+    }
+  }
+}
+
+//hook_cron
+function role_lease_cron() {
+  //Entity query..
+  //First get all role lease types
+  _role_lease_trigger_before_expire(); 
+  _role_lease_expire(); 
+}
+
+function role_lease_expire($role_lease) {
+  $role_lease->expire();
+}
+
+/**
+ *  Implements hook_role_lease_expire(), in here we call activate and deactivateshitesefvsefsf
+ */ 
+//TODO: check so this not implemented twice, in rule events
+//Standard action for release, can be overriden by modules with lower weight
+function role_lease_role_lease_expire($role_lease) {
+  //default is to release, but this can be overriden
+  $role_lease->release(ROLE_LEASE_RELEASE_REASON_EXPIRED);
+}
+
+/**
+ * Implements hook_role_lease_presave()
+ */
+/*
+function role_lease_role_lease_presave($entity) {
+}
+ */

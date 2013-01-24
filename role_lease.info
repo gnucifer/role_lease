@@ -1,0 +1,7 @@
+name = Role lease
+description = Purchase a membership of roles for a limited amout of time
+core = 7.x
+files[] = role_lease_type.admin.inc
+files[] = role_lease.info.inc
+dependencies[] = dibs
+dependencies[] = entity

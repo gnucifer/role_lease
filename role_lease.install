@@ -1,0 +1,258 @@
+<?php
+
+
+//TODO: uninstall hook to clean up fields
+
+/**
+ * @file
+ * Install file for DIBS example
+ */
+
+/**
+ * Implementation of hook_install().
+ */
+function role_lease_install() {
+}
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function role_lease_uninstall() {
+}
+
+/**
+ * Implements hook_schema().
+ */
+function role_lease_schema() {
+  $schema['role_lease'] = array(
+    'description' => 'Stores role lease items.',
+    'fields' => array(
+      'rlid' => array(
+        'type' => 'serial',
+        'not null' => TRUE,
+        'description' => 'Primary Key: Unique role lease item ID.',
+      ),
+      'type' => array(
+        'description' => 'The {role_lease_type}.type of this role_lease.',
+        'type' => 'varchar',
+        'length' => 32,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'uid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'default' => NULL,
+        'description' => "The {users}.uid of the associated user.",
+      ),
+      /*
+      'status' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => t('TODO.'),
+      ),
+      */
+      'active' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => t('TODO.'),
+      ),
+      /*
+      'label' => array(
+        'description' => 'A human-readable label for this role_lease.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      */
+      'expiry_time' => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => t('Role expiration timestamp.'),
+      ),
+      'expired' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => t('Flag to indicate if role lease is expired.'),
+      ),
+      'before_expire_triggered' => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0x00,
+        'size' => 'tiny',
+        'description' => 'Flag for if before expire has been triggered.',
+      ),
+      'acquired_time' => array(
+        'description' => 'The Unix timestamp when the role lease was acquired.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'released_time' => array(
+        'description' => 'The Unix timestamp when the role lease was released.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'release_reason' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => t('TODO.'),
+      ),
+      'created' => array(
+        'description' => 'The Unix timestamp when the role lease was created.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'changed' => array(
+        'description' => 'The Unix timestamp when the role lease was most recently saved.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+    ),
+    /* //needed when included in foreign keys?
+    'indexes' => array(
+      'uid' => array('uid'),
+    ),
+    */
+    'foreign keys' => array(
+      'uid' => array(
+        'table' => 'users', //users_roles?
+        'columns' => array('uid' => 'uid'),
+      ),
+      'type' => array(
+        'table' => 'role_lease_type',
+        'columns' => array('type' => 'type'),
+      ),
+    ),
+    'primary key' => array('rlid'),
+    'unique keys' => array(
+      'real_primary_key' => array('type', 'uid'), //More than one lease of same type is not allowed per user
+    ),
+  );
+
+  $schema['role_lease_type'] = array(
+    'description' => 'Stores information about all defined role lease types.',
+    'fields' => array(
+      'id' => array(
+        'type' => 'serial',
+        'not null' => TRUE,
+        'description' => 'Primary Key: Unique role lease type ID.',
+      ),
+      'type' => array(
+        'description' => 'The machine-readable name of this role lease type.',
+        'type' => 'varchar',
+        'length' => 32,
+        'not null' => TRUE,
+      ),
+      'label' => array(
+        'description' => 'The human-readable name of this role lease type.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'weight' => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'size' => 'tiny',
+        'description' => 'The weight of this role_lease type in relation to others.',
+      ),
+      /*
+      'group_name' => array(
+        'type' => 'varchar',
+        'length' => 64, 
+        'default' => 'default',
+        'description' => 'Logical group for entity types, might need this later',
+      ),
+      */
+      'rid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'Foreign Key: {role}.rid.',
+      ),
+      'lease_time' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'The role lease duration',
+      ),
+      'lease_time_unit' => array( //could cause trouble
+        'type' => 'char',
+        'length' => 1,
+        'not null' => TRUE,
+        'default' => 'Y', 
+        'description' => 'The role lease duration unit',
+      ),
+      //'trigger_time' =>
+      'data' => array(
+        'type' => 'text',
+        'not null' => FALSE,
+        'size' => 'big',
+        'serialize' => TRUE,
+        'description' => 'A serialized array of additional data related to this role lease type.',
+      ),
+      'status' => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        // Set the default to ENTITY_CUSTOM without using the constant as it is
+        // not safe to use it at this point.
+        'default' => 0x01,
+        'size' => 'tiny',
+        'description' => 'The status of the lease.',
+      ),
+      'module' => array( //TODO: module-specific hooks
+        'description' => 'The name of the providing module if the entity has been defined in code.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => FALSE,
+      ),
+    ),
+    'primary key' => array('id'),
+    'foreign keys' => array(
+      'role' => array(
+        'table' => 'roles',
+        'columns' => array('rid' => 'rid'),
+      ),
+    ),
+    'unique keys' => array(
+      'real_primary_key' => array('type'),
+    ),
+  );
+  return $schema;
+}
+
+
+function role_lease_update_7100() {
+  db_add_field(
+    'role_lease',
+    'before_expire_triggered',
+    array(
+      'type' => 'int',
+      'not null' => TRUE,
+      'default' => 0x00,
+      'size' => 'tiny',
+      'description' => 'Flag for if before expire has been triggered.',
+    )
+  );
+  db_add_index('role_lease', 'before_expire_triggered', array('before_expire_triggered'));
+}
